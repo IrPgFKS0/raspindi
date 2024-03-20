@@ -13,7 +13,7 @@
 class NdiOutput : public Output
 {
 public:
-	NdiOutput(VideoOptions const *options, std::string neopixelPath);
+	NdiOutput(VideoOptions const *options, std::string neopixelPath, std::string ndiStreamName);
 	~NdiOutput();
 
     bool isProgram();

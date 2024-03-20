@@ -7,10 +7,10 @@
 
 #include "ndi_output.hpp"
 
-NdiOutput::NdiOutput(VideoOptions const *options, std::string neopixelPath)
+NdiOutput::NdiOutput(VideoOptions const *options, std::string neopixelPath, std::string ndiStreamName)
 	: Output(options)
 {
-    this->NDI_send_create_desc.p_ndi_name = "Video Feed";
+    this->NDI_send_create_desc.p_ndi_name = ndiStreamName.c_str();
     this->pNDI_send = NDIlib_send_create(&NDI_send_create_desc);
 	if (!pNDI_send)
 	{

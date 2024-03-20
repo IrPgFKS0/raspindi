@@ -1,21 +1,18 @@
+/* Adapted from rpicam_vid.cpp - libcamera video record app for NDI output. */
+
 #include <chrono>
 #include <poll.h>
 #include <signal.h>
 #include <sys/signalfd.h>
 #include <sys/stat.h>
 
-#include "core/libcamera_encoder.hpp"
+#include "core/rpicam_encoder.hpp"
+#include "output/output.hpp"
 #include "ndi_output.hpp"
 #include <libconfig.h++>
 
 using namespace std::placeholders;
-bool exit_loop = false;
 libconfig::Config cfg;
-
-static void sigint_handler(int)
-{
-	exit_loop = true;
-}
 
 int loadConfig()
 {
@@ -38,117 +35,137 @@ int loadConfig()
 	return 0;
 }
 
-int _getValue(std::string parameter, int defaultValue, int min, int max)
-{
-    try
-    {
-        int value = cfg.lookup(parameter);
-        if (value > max)
-        {
-            std::cerr << "Invalid value for " << parameter << ": " << value << std::endl;
-            return 100;
-        }
-        if (value < 0)
-        {
-            std::cerr << "Invalid value for " << parameter << ": " << value << std::endl;
-            return 0;
-        }
-        return value;
-    } catch (libconfig::SettingNotFoundException)
-    {
-        return defaultValue;
-    }
-}
-
-int _getValue(std::string parameter, int defaultValue)
-{
-	try
-    {
-        int value = cfg.lookup(parameter);
-        return value;
-    } catch (libconfig::SettingNotFoundException)
-    {
-        return defaultValue;
-    }
-}
-
-float _getValue(std::string parameter, float defaultValue)
-{
-	try
-    {
-        float value = cfg.lookup(parameter);
-        return value;
-    } catch (libconfig::SettingNotFoundException)
-    {
-        return defaultValue;
-    }
-}
-
 std::string _getValue(std::string parameter, std::string defaultValue)
 {
-	try
+//    std::cout << "Lookup Parameter: " << parameter << std::endl;
+    try
     {
-        std::string value = cfg.lookup(parameter);
+        std::string value = cfg.lookup(parameter).c_str();
+//        std::cout << "Value: " << value << std::endl;
         return value;
-    } catch (libconfig::SettingNotFoundException)
+    }
+    catch(const libconfig::SettingNotFoundException &nfex)
     {
+//        std::cerr << "Setting Not Found Returning Default: " << defaultValue << std::endl;
         return defaultValue;
     }
 }
 
-void mirrored_rotation(VideoOptions *options)
+// Some keypress/signal handling.
+
+static int signal_received;
+static void default_signal_handler(int signal_number)
 {
-	std::string value = _getValue("mirror", "none");
-	libcamera::Transform transform = libcamera::Transform::Identity;
-	bool hflip = false;
-	bool vflip = false;
-	if (value == "horizontal")
-	{
-		hflip = true;
-	}
-	if (value == "vertical")
-	{
-		vflip = true;
-	}
-	if (value == "both")
-	{
-		hflip = true;
-		vflip = true;
-	}
-	if (hflip)
-		transform = libcamera::Transform::HFlip * transform;
-	if (vflip)
-		transform = libcamera::Transform::VFlip * transform;
-	
-	bool ok;
-	libcamera::Transform rotation = libcamera::transformFromRotation(_getValue("rotation", 0), &ok);
-	if (!ok)
-		throw std::runtime_error("illegal rotation value");
-	transform = rotation * transform;
-	options->transform = transform;
+	signal_received = signal_number;
+	LOG(1, "Received signal " << signal_number);
 }
 
-static void event_loop(LibcameraEncoder &app)
+static int get_key_or_signal(VideoOptions const *options, pollfd p[1])
+{
+	int key = 0;
+	if (signal_received == SIGINT)
+		return 'x';
+	if (options->keypress)
+	{
+		poll(p, 1, 0);
+		if (p[0].revents & POLLIN)
+		{
+			char *user_string = nullptr;
+			size_t len;
+			[[maybe_unused]] size_t r = getline(&user_string, &len, stdin);
+			key = user_string[0];
+		}
+	}
+	if (options->signal)
+	{
+		if (signal_received == SIGUSR1)
+			key = '\n';
+		else if ((signal_received == SIGUSR2) || (signal_received == SIGPIPE))
+			key = 'x';
+		signal_received = 0;
+	}
+	return key;
+}
+
+static int get_colourspace_flags(std::string const &codec)
+{
+	if (codec == "mjpeg" || codec == "yuv420")
+		return RPiCamEncoder::FLAG_VIDEO_JPEG_COLOURSPACE;
+	else
+		return RPiCamEncoder::FLAG_VIDEO_NONE;
+}
+
+// The main even loop for the application.
+
+static void event_loop(RPiCamEncoder &app)
 {
 	VideoOptions const *options = app.GetOptions();
-	std::unique_ptr<Output> output = std::unique_ptr<Output>(new NdiOutput(options, _getValue("neopixel_path", "/tmp/neopixel.state")));
-	app.SetEncodeOutputReadyCallback(std::bind(&Output::OutputReady, output.get(), _1, _2, _3, _4));
+	std::unique_ptr<Output> output;
+	if (options->output.empty()) {
+		// Used to write to NDI stream
+		output = std::unique_ptr<Output>(
+			new NdiOutput(options, _getValue("neopixel_path", "/tmp/neopixel.state"), _getValue("ndi_stream_name", "Video Feed"))
+		);
+	} else {
+		// Used to write to file
+		output = std::unique_ptr<Output>(Output::Create(options));
+	}
 
+	app.SetEncodeOutputReadyCallback(std::bind(&Output::OutputReady, output.get(), _1, _2, _3, _4));
+	app.SetMetadataReadyCallback(std::bind(&Output::MetadataReady, output.get(), _1));
 
 	app.OpenCamera();
-	app.ConfigureVideo(LibcameraEncoder::FLAG_VIDEO_JPEG_COLOURSPACE);
+	app.ConfigureVideo(get_colourspace_flags(options->codec));
 	app.StartEncoder();
 	app.StartCamera();
-	while (!exit_loop)
+	auto start_time = std::chrono::high_resolution_clock::now();
+
+	// Monitoring for keypresses and signals.
+	signal(SIGUSR1, default_signal_handler);
+	signal(SIGUSR2, default_signal_handler);
+	signal(SIGINT, default_signal_handler);
+	// SIGPIPE gets raised when trying to write to an already closed socket. This can happen, when
+	// you're using TCP to stream to VLC and the user presses the stop button in VLC. Catching the
+	// signal to be able to react on it, otherwise the app terminates.
+	signal(SIGPIPE, default_signal_handler);
+	pollfd p[1] = { { STDIN_FILENO, POLLIN, 0 } };
+
+	for (unsigned int count = 0; ; count++)
 	{
-		LibcameraEncoder::Msg msg = app.Wait();
-		if (msg.type == LibcameraEncoder::MsgType::Quit)
+		RPiCamEncoder::Msg msg = app.Wait();
+		if (msg.type == RPiCamApp::MsgType::Timeout)
+		{
+			LOG_ERROR("ERROR: Device timeout detected, attempting a restart!!!");
+			app.StopCamera();
+			app.StartCamera();
+			continue;
+		}
+		if (msg.type == RPiCamEncoder::MsgType::Quit)
 			return;
-		else if (msg.type != LibcameraEncoder::MsgType::RequestComplete)
+		else if (msg.type != RPiCamEncoder::MsgType::RequestComplete)
 			throw std::runtime_error("unrecognised message!");
+		int key = get_key_or_signal(options, p);
+		if (key == '\n')
+			output->Signal();
+
+		LOG(2, "Viewfinder frame " << count);
+		auto now = std::chrono::high_resolution_clock::now();
+		bool timeout = !options->frames && options->timeout &&
+					   ((now - start_time) > options->timeout.value);
+		bool frameout = options->frames && count >= options->frames;
+		if (timeout || frameout || key == 'x' || key == 'X')
+		{
+			if (timeout)
+				LOG(1, "Halting: reached timeout of " << options->timeout.get<std::chrono::milliseconds>()
+													  << " milliseconds.");
+			app.StopCamera(); // stop complains if encoder very slow to close
+			app.StopEncoder();
+			return;
+		}
 
 		CompletedRequestPtr &completed_request = std::get<CompletedRequestPtr>(msg.payload);
 		app.EncodeBuffer(completed_request, app.VideoStream());
+		app.ShowPreview(completed_request, app.VideoStream());
 	}
 }
 
@@ -156,34 +173,22 @@ int main(int argc, char *argv[])
 {
 	try
 	{
-		LibcameraEncoder app;
+		RPiCamEncoder app;
 		VideoOptions *options = app.GetOptions();
 		loadConfig();
-		options->codec = "YUV420";
-		options->verbose = false;
-		options->nopreview = true;
-		options->denoise = "off";
-		// Set flip
-		options->width = _getValue("width", 1280);
-		options->height = _getValue("height", 720);
-		options->framerate = _getValue("framerate", 25);
-		options->awb = _getValue("awb", "auto");
-		options->awb_gain_b = _getValue("b_gain", 0.0f);
-		options->awb_gain_r = _getValue("r_gain", 0.0f);
-		options->saturation = _getValue("saturation", 1);
-		options->sharpness = _getValue("sharpness", 1);
-		options->contrast = _getValue("contrast", 1);
-		options->brightness = ((_getValue("brightness", 50) / 50) - 1);
-		options->exposure = _getValue("exposuremode", "auto");
-		options->metering = _getValue("meteringmode", "average");
-		mirrored_rotation(options);
-		options->Print();
-		event_loop(app);
+		if (options->Parse(argc, argv))
+		{
+			if (options->verbose >= 2)
+				options->Print();
+
+			event_loop(app);
+		}
 	}
 	catch (std::exception const &e)
 	{
-		std::cerr << "ERROR: *** " << e.what() << " ***" << std::endl;
+		LOG_ERROR("ERROR: *** " << e.what() << " ***");
 		return -1;
 	}
 	return 0;
 }
+

@@ -1,17 +1,2 @@
-neopixel_path = "/tmp/neopixel.state";
-camera_number = "-1";
-height=720;
-width=1280;
-fps=25;
-
-# awb: "auto"; // Options: auto, normal, incadescent, tungsten, fluorescent, indoor, daylight, cloudy, custom
-# r_gain: 0; // red gain (for custom awb)
-# b_gain: 0; // blue gain (for custom awb)
-# saturation: 0; // Value in range 0.0f - 15.99f
-# sharpness: 0; // Value in range 0.0f - 15.99f
-# contrast: 0; // Value in range 0.0f - 15.99f
-# brightness: 50; // Value in range 0 - 100
-# exposuremode: "auto"; // Options: normal, sport, short, long, custom
-# meteringmode: "average"; // Options: centre, spot, average, matrix, custom
-# rotation: 0; // Options: 0, 180
-# mirror: "none"; // Options: none, horizontal, vertical, both
+neopixel_path="/tmp/neopixel.state";
+ndi_stream_name="Astro Stream";

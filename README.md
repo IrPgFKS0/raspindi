@@ -1,4 +1,7 @@
 # RaspiNDI
+> This is Mods working copy with some additional fixes and features. You are
+> welcome to use it, but the original work and tree is at 
+> https://github.com/raspberry-pi-camera/raspindi.
 
 RaspiNDI is a simple NDI send library for Raspberry Pi. It was initially
 developed to allow a streaming setup for a church during the COVID-19 outbreak
@@ -101,6 +104,10 @@ works well.
 
 
 # Changelog
+
+## Mods private fixes
+Use system-wide libcamera-apps headers (ref: https://github.com/raspberry-pi-camera/raspindi/compare/main...nettings:raspindi:main).
+Enable all rpicam-vid parameters.
 
 ## v3.0.4
 Updated libcamera code to fit with libcamera changes.
