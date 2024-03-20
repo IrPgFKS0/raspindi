@@ -22,6 +22,6 @@ if [ ! -e /etc/raspindi.conf ]; then
 fi
 
 echo '#!/usr/bin/env sh
-LD_LIBRARY_PATH="/opt/raspindi/lib" /opt/raspindi/bin/raspindi
+LD_LIBRARY_PATH="/opt/raspindi/lib" /opt/raspindi/bin/raspindi --framerate 25 -t 0 --width 1280 --height 720 --codec yuv420
 ' > "$INSTALL_DIR/raspindi.sh"
 chmod +x "$INSTALL_DIR/raspindi.sh"
