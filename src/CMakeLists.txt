@@ -2,6 +2,7 @@ add_executable(raspindi)
 
 target_sources(raspindi PRIVATE
         main.cpp
+#        main_w_network.cpp
 )
 target_include_directories(raspindi PRIVATE
         ../include/
