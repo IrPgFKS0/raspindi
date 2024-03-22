@@ -105,7 +105,7 @@ works well.
 
 # Changelog
 
-## Mode private additions
+## Mods private additions
 I added a separate "main_w_network.cpp" file that integrates a very simple API socket server with the raspindi process that allows changing some camera settings on the fly and adjust them while the stream is running.
 
 ## Mods private fixes
